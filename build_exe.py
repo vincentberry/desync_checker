@@ -1,71 +1,164 @@
 #!/usr/bin/env python3
 """
-Script de compilation en EXE pour Desync Checker
+Build script for the Desync Checker Windows executable.
 """
-import os
+
+from __future__ import annotations
+
+import shutil
 import subprocess
 import sys
+from datetime import datetime
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+APP_FILE = ROOT / "desync_checker_app.py"
+SPEC_FILE = ROOT / "desync_checker.spec"
+DEFAULT_DIST_DIR = ROOT / "dist"
+DEFAULT_BUILD_DIR = ROOT / "build"
+ICON_FILE = ROOT / "assets" / "desync_checker.ico"
+
+
+SPEC_CONTENT = """# -*- mode: python ; coding: utf-8 -*-
+from pathlib import Path
+import subprocess
 import shutil
 
-def install_pyinstaller():
-    """Installe PyInstaller si nécessaire"""
-    try:
-        import PyInstaller
-        print("✅ PyInstaller déjà installé")
-        return True
-    except ImportError:
-        print("📦 Installation de PyInstaller...")
-        try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstaller"])
-            print("✅ PyInstaller installé avec succès")
-            return True
-        except subprocess.CalledProcessError as e:
-            print(f"❌ Erreur lors de l'installation de PyInstaller: {e}")
-            return False
 
-def create_spec_file():
-    """Crée un fichier .spec personnalisé pour PyInstaller"""
-    spec_content = '''# -*- mode: python ; coding: utf-8 -*-
+PROJECT_ROOT = Path.cwd()
+ASSETS_DIR = PROJECT_ROOT / "assets"
+
+
+def _find_tool_on_path(tool_name):
+    candidates = []
+    try:
+        result = subprocess.run(["where", tool_name], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            for raw_line in result.stdout.splitlines():
+                candidate = raw_line.strip()
+                if candidate:
+                    candidates.append(candidate)
+    except Exception:
+        pass
+
+    which_candidate = shutil.which(tool_name)
+    if which_candidate:
+        candidates.append(which_candidate)
+
+    unique = []
+    seen = set()
+    for candidate in candidates:
+        key = str(Path(candidate)).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(candidate)
+    return unique
+
+
+def _is_chocolatey_shim(candidate):
+    normalized = str(candidate).replace("/", "\\\\").lower()
+    return "\\\\chocolatey\\\\bin\\\\" in normalized
+
+
+def _resolve_tool_binary(tool_name):
+    real_candidates = [
+        Path("C:/ProgramData/chocolatey/lib/ffmpeg/tools/ffmpeg/bin") / f"{tool_name}.exe",
+        Path("C:/ProgramData/chocolatey/lib/ffmpeg/tools/bin") / f"{tool_name}.exe",
+    ]
+    for candidate in real_candidates:
+        if candidate.exists():
+            return str(candidate)
+
+    for candidate in _find_tool_on_path(tool_name):
+        if _is_chocolatey_shim(candidate):
+            continue
+        if Path(candidate).exists():
+            return str(candidate)
+
+    for candidate in _find_tool_on_path(tool_name):
+        if Path(candidate).exists():
+            return str(candidate)
+
+    return None
+
+
+def _collect_runtime_binaries():
+    binaries = []
+    seen = set()
+
+    ffmpeg_path = _resolve_tool_binary("ffmpeg")
+    ffprobe_path = _resolve_tool_binary("ffprobe")
+    if not ffprobe_path and ffmpeg_path:
+        ffprobe_candidate = Path(ffmpeg_path).with_name("ffprobe.exe")
+        if ffprobe_candidate.exists():
+            ffprobe_path = str(ffprobe_candidate)
+
+    for tool_path in (ffmpeg_path, ffprobe_path):
+        if not tool_path:
+            continue
+        resolved = str(Path(tool_path).resolve())
+        key = resolved.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        binaries.append((resolved, "."))
+
+    return binaries
+
 
 block_cipher = None
+bundled_binaries = _collect_runtime_binaries()
+datas = []
+
+for asset_name in ("desync_checker_logo.png", "desync_checker.ico"):
+    asset_path = ASSETS_DIR / asset_name
+    if asset_path.exists():
+        datas.append((str(asset_path), "assets"))
+
 
 a = Analysis(
-    ['desync_checker_app_fixed.py'],
-    pathex=[],
-    binaries=[],
-    datas=[],
+    ["desync_checker_app.py"],
+    pathex=[str(PROJECT_ROOT)],
+    binaries=bundled_binaries,
+    datas=datas,
     hiddenimports=[
-        'PyQt6.QtCore',
-        'PyQt6.QtWidgets', 
-        'PyQt6.QtGui',
-        'librosa',
-        'librosa.core',
-        'librosa.core.audio',
-        'scipy',
-        'scipy.signal',
-        'cv2',
-        'numpy',
-        'tempfile',
-        'subprocess',
-        'numba',
-        'numba.core',
-        'numba.typed',
-        'sklearn',
-        'sklearn.utils._cython_blas',
-        'sklearn.neighbors.typedefs',
-        'sklearn.neighbors.quad_tree',
-        'sklearn.tree._utils'
+        "PyQt6.QtCore",
+        "PyQt6.QtWidgets",
+        "PyQt6.QtGui",
+        "PyQt6.QtMultimedia",
+        "librosa",
+        "librosa.core",
+        "librosa.core.audio",
+        "scipy",
+        "scipy.signal",
+        "scipy.io.wavfile",
+        "cv2",
+        "numpy",
+        "tempfile",
+        "subprocess",
+        "audioread",
+        "audioread.ffdec",
+        "numba",
+        "numba.core",
+        "numba.typed",
+        "sklearn",
+        "sklearn.utils._cython_blas",
+        "sklearn.neighbors.typedefs",
+        "sklearn.neighbors.quad_tree",
+        "sklearn.tree._utils",
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        'matplotlib',
-        'pandas',
-        'jupyter',
-        'notebook',
-        'IPython',
-        'tkinter'
+        "matplotlib",
+        "pandas",
+        "jupyter",
+        "notebook",
+        "IPython",
+        "tkinter",
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -74,6 +167,7 @@ a = Analysis(
 )
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+icon_path = ASSETS_DIR / "desync_checker.ico"
 
 exe = EXE(
     pyz,
@@ -82,176 +176,239 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='DesyncChecker',
+    name="DesyncChecker",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,  # Pas de console pour l'interface graphique
+    console=False,
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None  # Vous pouvez ajouter un fichier .ico ici
+    icon=str(icon_path) if icon_path.exists() else None,
 )
-'''
-    
-    with open("desync_checker.spec", "w", encoding="utf-8") as f:
-        f.write(spec_content)
-    
-    print("✅ Fichier .spec créé")
+"""
 
-def compile_exe():
-    """Compile l'application en EXE"""
-    print("🔨 Compilation en cours...")
-    print("⏳ Cela peut prendre plusieurs minutes...")
-    
+
+def install_pyinstaller() -> bool:
     try:
-        # Nettoyer les anciens builds
-        if os.path.exists("build"):
-            shutil.rmtree("build")
-        if os.path.exists("dist"):
-            shutil.rmtree("dist")
-        
-        # Compiler avec le fichier spec
-        result = subprocess.run([
-            sys.executable, "-m", "PyInstaller",
-            "--clean",
-            "desync_checker.spec"
-        ], capture_output=True, text=True, timeout=600)
-        
-        if result.returncode == 0:
-            print("✅ Compilation réussie !")
-            
-            # Vérifier que l'EXE existe
-            exe_path = os.path.join("dist", "DesyncChecker.exe")
-            if os.path.exists(exe_path):
-                exe_size = os.path.getsize(exe_path) / (1024 * 1024)  # Taille en MB
-                print(f"📁 EXE créé : {exe_path}")
-                print(f"📏 Taille : {exe_size:.1f} MB")
-                return True
-            else:
-                print("❌ EXE non trouvé après compilation")
-                return False
-        else:
-            print(f"❌ Erreur de compilation:")
-            print(result.stderr)
-            return False
-            
-    except subprocess.TimeoutExpired:
-        print("❌ Timeout lors de la compilation (>10 minutes)")
-        return False
-    except Exception as e:
-        print(f"❌ Erreur lors de la compilation: {e}")
-        return False
+        import PyInstaller  # noqa: F401
 
-def copy_ffmpeg():
-    """Copie FFmpeg à côté de l'EXE si disponible"""
-    ffmpeg_path = shutil.which("ffmpeg")
-    if not ffmpeg_path:
-        # Chercher dans l'installation utilisateur
-        user_ffmpeg = os.path.expanduser("~\\ffmpeg\\bin\\ffmpeg.exe")
-        if os.path.exists(user_ffmpeg):
-            ffmpeg_path = user_ffmpeg
-    
-    if ffmpeg_path:
+        print("[OK] PyInstaller deja installe")
+        return True
+    except ImportError:
+        print("[INFO] Installation de PyInstaller...")
         try:
-            # Copier FFmpeg dans le dossier dist
-            dist_ffmpeg = os.path.join("dist", "ffmpeg.exe")
-            shutil.copy2(ffmpeg_path, dist_ffmpeg)
-            
-            # Copier aussi ffprobe si disponible
-            ffprobe_path = ffmpeg_path.replace("ffmpeg.exe", "ffprobe.exe")
-            if os.path.exists(ffprobe_path):
-                dist_ffprobe = os.path.join("dist", "ffprobe.exe")
-                shutil.copy2(ffprobe_path, dist_ffprobe)
-            
-            print("✅ FFmpeg copié avec l'EXE")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstaller"])
+            print("[OK] PyInstaller installe")
             return True
-        except Exception as e:
-            print(f"⚠️  Impossible de copier FFmpeg: {e}")
+        except subprocess.CalledProcessError as exc:
+            print(f"[ERREUR] impossible d'installer PyInstaller : {exc}")
             return False
-    else:
-        print("⚠️  FFmpeg non trouvé - la création de vidéos ne fonctionnera pas")
+
+
+def write_spec_file() -> None:
+    SPEC_FILE.write_text(SPEC_CONTENT, encoding="utf-8")
+    print(f"[OK] Spec PyInstaller mise a jour : {SPEC_FILE.name}")
+
+
+def _is_desync_checker_running() -> bool:
+    if sys.platform != "win32":
         return False
 
-def create_readme():
-    """Crée un README pour l'EXE"""
-    readme_content = """# Desync Checker - Version Portable
-
-## Installation
-Aucune installation requise ! Double-cliquez sur DesyncChecker.exe
-
-## Utilisation
-1. Lancez DesyncChecker.exe
-2. Cliquez sur "Charger une vidéo PGM enregistrée"
-3. Sélectionnez votre fichier vidéo de test
-4. Cliquez sur "Analyser décalage"
-
-## Formats supportés
-- Vidéo : MP4, MOV, AVI, MKV
-- Audio : Extraction automatique depuis la vidéo
-
-## Notes
-- Si FFmpeg.exe est présent dans le même dossier, la création de vidéos de test sera disponible
-- L'analyse fonctionne même sans FFmpeg
-- Pour des résultats optimaux, utilisez des vidéos avec flash lumineux et bip sonore distincts
-
-## Dépannage
-- Si l'application ne se lance pas, vérifiez que vous avez les droits d'exécution
-- Pour les erreurs audio, vérifiez que la vidéo contient une piste audio
-- Pour les erreurs de flash, vérifiez le contraste et la luminosité
-
-Version compilée le """ + str(__import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M"))
-
-    with open(os.path.join("dist", "README.txt"), "w", encoding="utf-8") as f:
-        f.write(readme_content)
-    
-    print("✅ README créé")
-
-def main():
-    print("=== Compilation Desync Checker en EXE ===\n")
-    
-    # Vérifier qu'on est dans le bon répertoire
-    if not os.path.exists("desync_checker_app_fixed.py"):
-        print("❌ Fichier desync_checker_app_fixed.py non trouvé")
-        print("Assurez-vous d'être dans le bon répertoire")
+    try:
+        result = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq DesyncChecker.exe", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception:
         return False
-    
-    # Étape 1: Installer PyInstaller
-    if not install_pyinstaller():
+
+    output = (result.stdout or "").strip()
+    return "DesyncChecker.exe" in output
+
+
+def _clean_directory(directory: Path) -> tuple[bool, str | None]:
+    if not directory.exists():
+        return True, None
+
+    try:
+        shutil.rmtree(directory)
+        print(f"[OK] Nettoyage : {directory.name}/")
+        return True, None
+    except PermissionError as exc:
+        return False, str(exc)
+
+
+def _create_fallback_directories() -> tuple[Path, Path] | None:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    fallback_dist_dir = ROOT / f"dist_{timestamp}"
+    fallback_build_dir = ROOT / f"build_{timestamp}"
+
+    fallback_build_ok, fallback_build_error = _clean_directory(fallback_build_dir)
+    if not fallback_build_ok:
+        print(f"[ERREUR] impossible de preparer {fallback_build_dir.name}/ : {fallback_build_error}")
+        return None
+
+    fallback_dist_ok, fallback_dist_error = _clean_directory(fallback_dist_dir)
+    if not fallback_dist_ok:
+        print(f"[ERREUR] impossible de preparer {fallback_dist_dir.name}/ : {fallback_dist_error}")
+        return None
+
+    print(f"[INFO] Build redirigee vers {fallback_dist_dir.name}/")
+    return fallback_dist_dir, fallback_build_dir
+
+
+def prepare_build_directories() -> tuple[Path, Path] | None:
+    build_ok, build_error = _clean_directory(DEFAULT_BUILD_DIR)
+    if not build_ok:
+        print(f"[ERREUR] impossible de nettoyer {DEFAULT_BUILD_DIR.name}/ : {build_error}")
+        return None
+
+    if _is_desync_checker_running():
+        print("[ATTENTION] DesyncChecker.exe est en cours d'execution.")
+        return _create_fallback_directories()
+
+    dist_ok, dist_error = _clean_directory(DEFAULT_DIST_DIR)
+    if dist_ok:
+        return DEFAULT_DIST_DIR, DEFAULT_BUILD_DIR
+
+    print(
+        "[ATTENTION] impossible de nettoyer dist/. "
+        "DesyncChecker.exe est probablement encore ouvert ou verrouille par Windows."
+    )
+    print(f"[INFO] Detail : {dist_error}")
+
+    return _create_fallback_directories()
+
+
+def _looks_like_locked_output_error(output: str) -> bool:
+    lowered = output.lower()
+    return "permissionerror" in lowered and "desyncchecker.exe" in lowered and "winerror 5" in lowered
+
+
+def compile_exe(dist_dir: Path, build_dir: Path) -> tuple[bool, str]:
+    print("[INFO] Compilation de l'executable en cours...")
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "PyInstaller",
+                "--clean",
+                "--noconfirm",
+                "--distpath",
+                str(dist_dir),
+                "--workpath",
+                str(build_dir),
+                str(SPEC_FILE),
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=900,
+        )
+    except subprocess.TimeoutExpired:
+        print("[ERREUR] timeout pendant la compilation (>15 minutes)")
+        return False, "timeout"
+    except Exception as exc:
+        print(f"[ERREUR] lancement PyInstaller impossible : {exc}")
+        return False, str(exc)
+
+    if result.returncode != 0:
+        combined_output = "\n".join(part for part in (result.stdout.strip(), result.stderr.strip()) if part)
+        return False, combined_output
+
+    exe_path = dist_dir / "DesyncChecker.exe"
+    if not exe_path.exists():
+        print("[ERREUR] compilation terminee mais executable introuvable.")
+        return False, "executable introuvable"
+
+    exe_size_mb = exe_path.stat().st_size / (1024 * 1024)
+    print(f"[OK] Executable cree : {exe_path}")
+    print(f"[OK] Taille : {exe_size_mb:.1f} MB")
+    return True, ""
+
+
+def create_readme(dist_dir: Path) -> None:
+    ffmpeg_embed_status = "integre a l'executable si present au moment de la build"
+    icon_status = "logo et icone integres"
+    readme_content = f"""Desync Checker - Version portable
+
+Lancement
+- Double-clique sur DesyncChecker.exe
+
+Fonctions disponibles
+- analyse auto audio/video
+- timeline manuelle avec frame par frame
+- raccourcis clavier et infos media
+
+Packaging
+- {ffmpeg_embed_status}
+- {icon_status}
+
+Notes
+- si FFmpeg n'etait pas detecte pendant la build, certaines fonctions audio ou de generation peuvent etre degradees
+- build generee le {datetime.now().strftime("%Y-%m-%d %H:%M")}
+"""
+    (dist_dir / "README.txt").write_text(readme_content, encoding="utf-8")
+    print("[OK] README de distribution cree")
+
+
+def validate_inputs() -> bool:
+    if not APP_FILE.exists():
+        print(f"[ERREUR] fichier introuvable : {APP_FILE.name}")
         return False
-    
-    # Étape 2: Créer le fichier .spec
-    create_spec_file()
-    
-    # Étape 3: Compiler
-    if not compile_exe():
-        return False
-    
-    # Étape 4: Copier FFmpeg (optionnel)
-    copy_ffmpeg()
-    
-    # Étape 5: Créer la documentation
-    create_readme()
-    
-    print("\n🎉 COMPILATION TERMINÉE !")
-    print("📁 Fichiers générés dans le dossier 'dist/':")
-    if os.path.exists("dist"):
-        for file in os.listdir("dist"):
-            file_path = os.path.join("dist", file)
-            if os.path.isfile(file_path):
-                size = os.path.getsize(file_path) / (1024 * 1024)
-                print(f"   - {file} ({size:.1f} MB)")
-    
-    print("\n📋 Instructions:")
-    print("1. Copiez le dossier 'dist/' sur n'importe quel PC Windows")
-    print("2. Lancez DesyncChecker.exe")
-    print("3. L'application fonctionne sans installation !")
-    
+
+    if not ICON_FILE.exists():
+        print(f"[INFO] icone absente pour le moment : {ICON_FILE}")
+
     return True
 
+
+def main() -> bool:
+    print("=== Build Desync Checker ===\n")
+
+    if not validate_inputs():
+        return False
+
+    if not install_pyinstaller():
+        return False
+
+    write_spec_file()
+    directories = prepare_build_directories()
+    if directories is None:
+        return False
+    dist_dir, build_dir = directories
+
+    compiled, compile_output = compile_exe(dist_dir, build_dir)
+    if not compiled and dist_dir == DEFAULT_DIST_DIR and _looks_like_locked_output_error(compile_output):
+        print("[ATTENTION] Le fichier de sortie a ete verrouille pendant la compilation.")
+        retry_directories = _create_fallback_directories()
+        if retry_directories is None:
+            print("[ERREUR] impossible de preparer un dossier de repli pour la nouvelle tentative.")
+            print(compile_output)
+            return False
+        dist_dir, build_dir = retry_directories
+        compiled, compile_output = compile_exe(dist_dir, build_dir)
+
+    if not compiled:
+        print("[ERREUR] la compilation a echoue.")
+        if compile_output.strip():
+            print(compile_output)
+        return False
+
+    create_readme(dist_dir)
+
+    print("\nBuild terminee.")
+    print(f"Sortie : {dist_dir / 'DesyncChecker.exe'}")
+    return True
+
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(0 if main() else 1)

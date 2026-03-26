@@ -1,0 +1,6 @@
+PyQt6
+opencv-python
+librosa
+audioread
+scipy
+numpy
