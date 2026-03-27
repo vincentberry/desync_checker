@@ -95,6 +95,11 @@ for asset_name in ("desync_checker_logo.png", "desync_checker.ico"):
     if asset_path.exists():
         datas.append((str(asset_path), "assets"))
 
+for document_name in ("LICENSE", "README.md"):
+    document_path = PROJECT_ROOT / document_name
+    if document_path.exists():
+        datas.append((str(document_path), "."))
+
 
 a = Analysis(
     ["desync_checker_app.py"],

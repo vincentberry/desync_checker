@@ -2,6 +2,13 @@
 
 Outil Windows pour mesurer automatiquement un decalage audio/video a partir d'une capture contenant un flash visuel et un bip sonore.
 
+## Projet
+
+- Version : `1.0.0`
+- Createur : `Vincent Berry`
+- Licence open source : `MIT`
+- GitHub : [vincentberry/desync_checker](https://github.com/vincentberry/desync_checker)
+
 ## Idee generale
 
 Le projet repose maintenant sur un workflow unique et lisible :

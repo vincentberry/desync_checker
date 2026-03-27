@@ -5,6 +5,7 @@ from pathlib import Path
 import cv2
 from PyQt6 import QtCore, QtGui, QtMultimedia, QtWidgets
 
+from desync_metadata import APP_CREATOR, APP_GITHUB_URL, APP_LICENSE_NAME, APP_NAME, APP_VERSION
 from desync_core import (
     analyze_video,
     build_timeline_data,
@@ -395,6 +396,43 @@ class WaveformWidget(QtWidgets.QWidget):
         end_index = min(max(int(end_ratio * total_points) + 1, start_index + 1), total_points)
         return waveform[start_index:end_index]
 
+    def _draw_waveform_envelope(
+        self,
+        painter: QtGui.QPainter,
+        waveform_rect: QtCore.QRect,
+        waveform_min: list[float],
+        waveform_max: list[float],
+        color: QtGui.QColor,
+    ) -> None:
+        point_count = min(len(waveform_min), len(waveform_max))
+        if point_count <= 0:
+            return
+
+        middle_y = waveform_rect.center().y()
+        usable_height = max(waveform_rect.height() - 6, 10)
+        half_height = usable_height / 2.0
+        fill_color = QtGui.QColor(color)
+        fill_color.setAlpha(180)
+
+        for index in range(point_count):
+            low = max(-1.0, min(1.0, waveform_min[index]))
+            high = max(-1.0, min(1.0, waveform_max[index]))
+            bar_left = waveform_rect.left() + int((index / point_count) * waveform_rect.width())
+            bar_right = waveform_rect.left() + int(((index + 1) / point_count) * waveform_rect.width())
+            bar_width = max(1, bar_right - bar_left)
+
+            y_top = int(round(middle_y - high * half_height))
+            y_bottom = int(round(middle_y - low * half_height))
+            if y_bottom < y_top:
+                y_top, y_bottom = y_bottom, y_top
+
+            bar_height = max(1, y_bottom - y_top + 1)
+            painter.fillRect(bar_left, y_top, bar_width, bar_height, fill_color)
+
+            if bar_width >= 3:
+                painter.fillRect(bar_left, y_top, bar_width, 1, color)
+                painter.fillRect(bar_left, y_bottom, bar_width, 1, color)
+
     def _grid_step_s(self) -> float:
         visible_duration_s = self._visible_duration_s()
         if visible_duration_s <= 0:
@@ -460,7 +498,8 @@ class WaveformWidget(QtWidgets.QWidget):
 
     def paintEvent(self, _event: QtGui.QPaintEvent) -> None:
         painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, False)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.TextAntialiasing, True)
 
         rect = self.rect()
         painter.fillRect(rect, QtGui.QColor("#111827"))
@@ -518,23 +557,34 @@ class WaveformWidget(QtWidgets.QWidget):
             waveform_rect = lane_rect.adjusted(0, 22, 0, -6)
             middle_y = waveform_rect.center().y()
             usable_height = max(waveform_rect.height() - 4, 10)
-            half_height = usable_height / 2.0
             waveform = getattr(track, "waveform", [])
             visible_waveform = self._visible_waveform(waveform)
-            step_x = waveform_rect.width() / max(len(visible_waveform), 1)
+            visible_waveform_min = self._visible_waveform(getattr(track, "waveform_min", []))
+            visible_waveform_max = self._visible_waveform(getattr(track, "waveform_max", []))
 
             self._draw_grid(painter, waveform_rect)
             painter.setPen(QtGui.QPen(QtGui.QColor("#203047"), 1))
             painter.drawLine(waveform_rect.left(), int(middle_y), waveform_rect.right(), int(middle_y))
 
-            waveform_pen = QtGui.QPen(lane_color, max(step_x, 1.0))
-            waveform_pen.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
-            painter.setPen(waveform_pen)
+            if visible_waveform_min and visible_waveform_max:
+                self._draw_waveform_envelope(
+                    painter,
+                    waveform_rect,
+                    visible_waveform_min,
+                    visible_waveform_max,
+                    lane_color,
+                )
+            else:
+                step_x = waveform_rect.width() / max(len(visible_waveform), 1)
+                half_height = usable_height / 2.0
+                waveform_pen = QtGui.QPen(lane_color, 1)
+                waveform_pen.setCapStyle(QtCore.Qt.PenCapStyle.FlatCap)
+                painter.setPen(waveform_pen)
 
-            for index, value in enumerate(visible_waveform):
-                amplitude = max(0.0, min(1.0, value)) * half_height
-                x = waveform_rect.left() + int(index * step_x)
-                painter.drawLine(x, int(middle_y - amplitude), x, int(middle_y + amplitude))
+                for index, value in enumerate(visible_waveform):
+                    amplitude = max(0.0, min(1.0, value)) * half_height
+                    x = waveform_rect.left() + int(index * step_x)
+                    painter.drawLine(x, int(middle_y - amplitude), x, int(middle_y + amplitude))
 
             if not getattr(track, "loaded", False):
                 painter.setPen(QtGui.QPen(QtGui.QColor("#f59e0b")))
@@ -609,7 +659,7 @@ class DesyncChecker(QtWidgets.QWidget):
         self.audio_player.mediaStatusChanged.connect(self._handle_audio_media_status_changed)
         self.audio_available = False
 
-        self.setWindowTitle("Desync Checker - Audio/Video Offset")
+        self.setWindowTitle(f"{APP_NAME} v{APP_VERSION} - Audio/Video Offset")
         self.setGeometry(100, 60, 1180, 720)
         self.setAcceptDrops(True)
         self.app_icon = _load_app_icon()
@@ -645,13 +695,6 @@ class DesyncChecker(QtWidgets.QWidget):
         header_layout.addWidget(title, 0, QtCore.Qt.AlignmentFlag.AlignVCenter)
         header_layout.addStretch(1)
         main_layout.addLayout(header_layout)
-
-        self.workflow_label = QtWidgets.QLabel(
-            "Charge une video, cale le flash et le bip sur la timeline, puis verifie l'ecart."
-        )
-        self.workflow_label.setWordWrap(True)
-        self.workflow_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        main_layout.addWidget(self.workflow_label)
 
         self.environment_label = QtWidgets.QLabel("")
         self.environment_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
@@ -862,13 +905,31 @@ class DesyncChecker(QtWidgets.QWidget):
 
         main_layout.addWidget(content_splitter, stretch=1)
 
+        footer_layout = QtWidgets.QHBoxLayout()
+        footer_layout.setSpacing(8)
+
         hint = QtWidgets.QLabel(
             "Astuce : tu peux aussi glisser-deposer une video compatible dans cette fenetre."
         )
-        hint.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        hint.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #5b6470;")
-        main_layout.addWidget(hint)
+        footer_layout.addWidget(hint, stretch=1)
+
+        self.project_meta_label = QtWidgets.QLabel(
+            (
+                f"Version {APP_VERSION} | Cree par {APP_CREATOR} | "
+                f"<a href=\"{APP_GITHUB_URL}\">GitHub</a> | {APP_LICENSE_NAME}"
+            )
+        )
+        self.project_meta_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        self.project_meta_label.setOpenExternalLinks(True)
+        self.project_meta_label.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        self.project_meta_label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextBrowserInteraction)
+        self.project_meta_label.setStyleSheet("color: #5b6470;")
+        footer_layout.addWidget(self.project_meta_label, stretch=0)
+
+        main_layout.addLayout(footer_layout)
 
         self.setLayout(main_layout)
 

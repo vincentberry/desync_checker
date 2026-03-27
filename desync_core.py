@@ -88,6 +88,8 @@ class AudioTrackInfo:
     duration_s: float
     waveform: list[float]
     loaded: bool
+    waveform_min: list[float] = field(default_factory=list)
+    waveform_max: list[float] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -721,31 +723,51 @@ def load_audio_samples(
     return None, None, bool(ffmpeg_path)
 
 
-def create_waveform_preview(samples: np.ndarray, points: int = 6000) -> list[float]:
-    absolute_samples = np.abs(samples)
-    if len(absolute_samples) == 0 or points <= 0:
-        return []
+def create_waveform_envelope(samples: np.ndarray, points: int = 6000) -> tuple[list[float], list[float], list[float]]:
+    if len(samples) == 0 or points <= 0:
+        return [], [], []
 
-    if len(absolute_samples) == 1:
-        return [1.0 for _ in range(points)]
+    if len(samples) == 1:
+        sample_value = float(np.clip(samples[0], -1.0, 1.0))
+        waveform_min = [min(sample_value, 0.0) for _ in range(points)]
+        waveform_max = [max(sample_value, 0.0) for _ in range(points)]
+        waveform_peak = [max(abs(sample_value), 0.0) for _ in range(points)]
+        return waveform_min, waveform_max, waveform_peak
 
-    boundaries = np.linspace(0, len(absolute_samples), points + 1, dtype=int)
-    waveform: list[float] = []
+    boundaries = np.linspace(0, len(samples), points + 1, dtype=int)
+    waveform_min_raw: list[float] = []
+    waveform_max_raw: list[float] = []
 
     for index in range(points):
         start = boundaries[index]
         end = boundaries[index + 1]
         if end <= start:
-            end = min(len(absolute_samples), start + 1)
-        segment = absolute_samples[start:end]
-        value = float(np.max(segment)) if len(segment) > 0 else 0.0
-        waveform.append(value)
+            end = min(len(samples), start + 1)
+        segment = samples[start:end]
+        if len(segment) > 0:
+            waveform_min_raw.append(float(np.min(segment)))
+            waveform_max_raw.append(float(np.max(segment)))
+        else:
+            waveform_min_raw.append(0.0)
+            waveform_max_raw.append(0.0)
 
-    max_value = max(waveform, default=0.0)
-    if max_value <= 0:
-        return [0.0 for _ in waveform]
+    max_abs_value = max(
+        max((abs(value) for value in waveform_min_raw), default=0.0),
+        max((abs(value) for value in waveform_max_raw), default=0.0),
+    )
+    if max_abs_value <= 0:
+        zeros = [0.0 for _ in waveform_min_raw]
+        return zeros, zeros.copy(), zeros.copy()
 
-    return [value / max_value for value in waveform]
+    waveform_min = [value / max_abs_value for value in waveform_min_raw]
+    waveform_max = [value / max_abs_value for value in waveform_max_raw]
+    waveform_peak = [max(abs(low), abs(high)) for low, high in zip(waveform_min, waveform_max)]
+    return waveform_min, waveform_max, waveform_peak
+
+
+def create_waveform_preview(samples: np.ndarray, points: int = 6000) -> list[float]:
+    _, _, waveform_peak = create_waveform_envelope(samples, points=points)
+    return waveform_peak
 
 
 def build_timeline_data(
@@ -826,7 +848,7 @@ def build_timeline_data(
 
             metadata_duration = _parse_ffprobe_float(stream.get("duration")) or 0.0
             if audio_samples is not None and sample_rate:
-                waveform = create_waveform_preview(audio_samples, points=waveform_points)
+                waveform_min, waveform_max, waveform = create_waveform_envelope(audio_samples, points=waveform_points)
                 duration_track_s = len(audio_samples) / sample_rate
                 duration_s = max(duration_s, duration_track_s)
                 audio_tracks.append(
@@ -839,6 +861,8 @@ def build_timeline_data(
                         sample_rate=sample_rate,
                         duration_s=max(duration_track_s, metadata_duration),
                         waveform=waveform,
+                        waveform_min=waveform_min,
+                        waveform_max=waveform_max,
                         loaded=True,
                     )
                 )
@@ -854,6 +878,8 @@ def build_timeline_data(
                         sample_rate=None,
                         duration_s=max(metadata_duration, duration_s),
                         waveform=[0.0 for _ in range(waveform_points)],
+                        waveform_min=[0.0 for _ in range(waveform_points)],
+                        waveform_max=[0.0 for _ in range(waveform_points)],
                         loaded=False,
                     )
                 )
@@ -861,7 +887,7 @@ def build_timeline_data(
     else:
         audio_samples, sample_rate, used_ffmpeg = load_audio_samples(normalized_path, logger=logger)
         if audio_samples is not None and sample_rate:
-            waveform = create_waveform_preview(audio_samples, points=waveform_points)
+            waveform_min, waveform_max, waveform = create_waveform_envelope(audio_samples, points=waveform_points)
             audio_duration_s = len(audio_samples) / sample_rate
             duration_s = max(duration_s, audio_duration_s)
             audio_tracks.append(
@@ -874,6 +900,8 @@ def build_timeline_data(
                     sample_rate=sample_rate,
                     duration_s=audio_duration_s,
                     waveform=waveform,
+                    waveform_min=waveform_min,
+                    waveform_max=waveform_max,
                     loaded=True,
                 )
             )
@@ -896,7 +924,7 @@ def build_timeline_data(
                     continue
 
                 fallback_success = True
-                waveform = create_waveform_preview(audio_samples, points=waveform_points)
+                waveform_min, waveform_max, waveform = create_waveform_envelope(audio_samples, points=waveform_points)
                 audio_duration_s = len(audio_samples) / sample_rate
                 duration_s = max(duration_s, audio_duration_s)
                 audio_tracks.append(
@@ -909,6 +937,8 @@ def build_timeline_data(
                         sample_rate=sample_rate,
                         duration_s=audio_duration_s,
                         waveform=waveform,
+                        waveform_min=waveform_min,
+                        waveform_max=waveform_max,
                         loaded=True,
                     )
                 )
@@ -922,7 +952,7 @@ def build_timeline_data(
                 )
                 used_ffmpeg = used_ffmpeg or stream_used_ffmpeg
                 if audio_samples is not None and sample_rate:
-                    waveform = create_waveform_preview(audio_samples, points=waveform_points)
+                    waveform_min, waveform_max, waveform = create_waveform_envelope(audio_samples, points=waveform_points)
                     audio_duration_s = len(audio_samples) / sample_rate
                     duration_s = max(duration_s, audio_duration_s)
                     audio_tracks.append(
@@ -935,6 +965,8 @@ def build_timeline_data(
                             sample_rate=sample_rate,
                             duration_s=audio_duration_s,
                             waveform=waveform,
+                            waveform_min=waveform_min,
+                            waveform_max=waveform_max,
                             loaded=True,
                         )
                     )

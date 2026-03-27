@@ -11,6 +11,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from desync_metadata import APP_CREATOR, APP_GITHUB_URL, APP_LICENSE_NAME, APP_NAME, APP_VERSION
+
 
 ROOT = Path(__file__).resolve().parent
 APP_FILE = ROOT / "desync_checker_app.py"
@@ -116,6 +118,11 @@ for asset_name in ("desync_checker_logo.png", "desync_checker.ico"):
     asset_path = ASSETS_DIR / asset_name
     if asset_path.exists():
         datas.append((str(asset_path), "assets"))
+
+for document_name in ("LICENSE", "README.md"):
+    document_path = PROJECT_ROOT / document_name
+    if document_path.exists():
+        datas.append((str(document_path), "."))
 
 
 a = Analysis(
@@ -338,10 +345,16 @@ def compile_exe(dist_dir: Path, build_dir: Path) -> tuple[bool, str]:
 def create_readme(dist_dir: Path) -> None:
     ffmpeg_embed_status = "integre a l'executable si present au moment de la build"
     icon_status = "logo et icone integres"
-    readme_content = f"""Desync Checker - Version portable
+    readme_content = f"""{APP_NAME} - Version portable
 
 Lancement
 - Double-clique sur DesyncChecker.exe
+
+Projet
+- version : {APP_VERSION}
+- createur : {APP_CREATOR}
+- licence : {APP_LICENSE_NAME}
+- github : {APP_GITHUB_URL}
 
 Fonctions disponibles
 - analyse auto audio/video
@@ -360,6 +373,14 @@ Notes
     print("[OK] README de distribution cree")
 
 
+def copy_license(dist_dir: Path) -> None:
+    license_file = ROOT / "LICENSE"
+    if not license_file.exists():
+        return
+    shutil.copy2(license_file, dist_dir / "LICENSE.txt")
+    print("[OK] Licence de distribution copiee")
+
+
 def validate_inputs() -> bool:
     if not APP_FILE.exists():
         print(f"[ERREUR] fichier introuvable : {APP_FILE.name}")
@@ -372,7 +393,7 @@ def validate_inputs() -> bool:
 
 
 def main() -> bool:
-    print("=== Build Desync Checker ===\n")
+    print(f"=== Build {APP_NAME} v{APP_VERSION} ===\n")
 
     if not validate_inputs():
         return False
@@ -404,6 +425,7 @@ def main() -> bool:
         return False
 
     create_readme(dist_dir)
+    copy_license(dist_dir)
 
     print("\nBuild terminee.")
     print(f"Sortie : {dist_dir / 'DesyncChecker.exe'}")

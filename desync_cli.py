@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import sys
 
+from desync_metadata import APP_CREATOR, APP_GITHUB_URL, APP_LICENSE_NAME, APP_NAME, APP_VERSION
 from desync_core import (
     analyze_video,
     check_environment,
@@ -18,7 +19,10 @@ from desync_core import (
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="CLI Desync Checker")
+    parser = argparse.ArgumentParser(
+        description=f"{APP_NAME} CLI v{APP_VERSION} - Cree par {APP_CREATOR} - {APP_GITHUB_URL}"
+    )
+    parser.add_argument("--version", action="version", version=f"{APP_NAME} CLI v{APP_VERSION} ({APP_LICENSE_NAME})")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     doctor_parser = subparsers.add_parser("doctor", help="Verifier l'environnement local")
